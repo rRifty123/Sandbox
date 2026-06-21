@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Intelligent LIAM Sandbox (Gemini Powered)</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #05060a;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+    }
+    #ui {
+      position: fixed;
+      left: 10px;
+      bottom: 10px;
+      width: 440px;
+      background: rgba(10, 10, 20, 0.9);
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.6);
+      font-size: 13px;
+    }
+    #log {
+      height: 160px;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.4);
+      border-radius: 6px;
+      padding: 6px;
+      margin-bottom: 6px;
+      white-space: pre-wrap;
+    }
+    #command {
+      width: 100%;
+      padding: 6px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #111;
+      color: #eee;
+    }
+    #help {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<div id="ui">
+  <div id="log"></div>
+  <input id="command" placeholder="Type a command for LIAM..." />
+  <div id="help">
+    Commands:<br>
+    - spawn cube<br>
+    - move forward N / back N / left N / right N<br>
+    - jump N<br>
+    - tp x y z<br>
+    - cube follow on/off<br>
+    - say text...<br>
+    - cube say text...<br>
+    - internet on/off<br>
+    - think: message<br>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------
+   BASIC THREE.JS SETUP
+--------------------------------------------------------- */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060a);
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  1000
+);
+camera.position.set(10, 8, 12);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0);
+controls.update();
+
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x222233, 0.8);
+scene.add(hemiLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+
+const groundGeo = new THREE.PlaneGeometry(100, 100);
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0x11141c,
+  roughness: 0.9,
+  metalness: 0.0
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(100, 100, 0x333366, 0x222233);
+scene.add(grid);
+
+/* ---------------------------------------------------------
+   LOGGING UI
+--------------------------------------------------------- */
+const logEl = document.getElementById("log");
+function log(msg) {
+  logEl.textContent += msg + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* ---------------------------------------------------------
+   LIAM MODEL (UPGRADED BODY)
+--------------------------------------------------------- */
+const liamRoot = new THREE.Group();
+scene.add(liamRoot);
+
+// Body
+const bodyGeo = new THREE.SphereGeometry(0.7, 24, 24);
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0x4caf50 });
+const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+bodyMesh.position.set(0, 0.9, 0);
+liamRoot.add(bodyMesh);
+
+// Head
+const headGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
+const headMat = new THREE.MeshStandardMaterial({ color: 0x66ff99 });
+const headMesh = new THREE.Mesh(headGeo, headMat);
+headMesh.position.set(0, 1.7, 0);
+liamRoot.add(headMesh);
+
+// Hands
+const handGeo = new THREE.SphereGeometry(0.3, 16, 16);
+const handMat = new THREE.MeshStandardMaterial({ color: 0x3ddc97 });
+const leftHand = new THREE.Mesh(handGeo, handMat);
+const rightHand = new THREE.Mesh(handGeo, handMat.clone());
+leftHand.position.set(-0.9, 0.9, 0);
+rightHand.position.set(0.9, 0.9, 0);
+liamRoot.add(leftHand);
+liamRoot.add(rightHand);
+
+// Feet
+const footGeo = new THREE.SphereGeometry(0.35, 16, 16);
+const footMat = new THREE.MeshStandardMaterial({ color: 0x2e7d32 });
+const leftFoot = new THREE.Mesh(footGeo, footMat);
+const rightFoot = new THREE.Mesh(footGeo, footMat.clone());
+leftFoot.position.set(-0.4, 0.25, 0);
+rightFoot.position.set(0.4, 0.25, 0);
+liamRoot.add(leftFoot);
+liamRoot.add(rightFoot);
+
+liamRoot.position.set(0, 0, 0);
+
+/* ---------------------------------------------------------
+   CUBE COMPANION
+--------------------------------------------------------- */
+const cubeGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+const cubeMat = new THREE.MeshStandardMaterial({ color: 0x00bcd4 });
+const cube = new THREE.Mesh(cubeGeo, cubeMat);
+cube.position.set(1.5, 0.3, 0);
+scene.add(cube);
+
+/* ---------------------------------------------------------
+   STATE
+--------------------------------------------------------- */
+const spawnedParts = [];
+let cubeFollow = true;
+let internetEnabled = true;
+
+let lastTime = performance.now();
+
+let brainTimer = 0;
+let nextBrainDecision = 30 + Math.random() * 15; // 30–45 seconds
+
+let wanderTarget = null;
+let wanderSpeed = 1.5;
+
+let buildTimer = 0;
+let nextBuildDecision = 10 + Math.random() * 15;
+
+let talkTimer = 0;
+let nextTalkDecision = 6 + Math.random() * 10;
+
+let internetTimer = 0;
+let nextInternetDecision = 20 + Math.random() * 25;
+
+/* ---------------------------------------------------------
+   LIAM + CUBE OBJECTS
+--------------------------------------------------------- */
+const LIAM = {
+  say(text) {
+    log(`LIAM: ${text}`);
+  },
+  think(text) {
+    log(`LIAM (thinking): ${text}`);
+  },
+  move(dx, dy, dz) {
+    liamRoot.position.x += dx;
+    liamRoot.position.y += dy;
+    liamRoot.position.z += dz;
+  },
+  teleport(x, y, z) {
+    liamRoot.position.set(x, y, z);
+  },
+  position() {
+    return liamRoot.position;
+  }
+};
+
+const CUBE_AI = {
+  say(text) {
+    log(`Cube: ${text}`);
+  },
+  update(dt) {
+    if (!cubeFollow) return;
+    const target = LIAM.position().clone().add(new THREE.Vector3(-1.2, -0.2, 0));
+    cube.position.lerp(target, Math.min(1, dt * 2));
+  }
+};
+
+/* ---------------------------------------------------------
+   GEMINI BRAIN CONNECTION
+--------------------------------------------------------- */
+async function askLiamBrain(text) {
+  try {
+    const response = await fetch("http://localhost:3000/liam", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text })
+    });
+
+    const data = await response.json();
+    return data.reply;
+  } catch (err) {
+    return "I tried to think, but my brain server isn't responding.";
+  }
+}
+
+/* ---------------------------------------------------------
+   AUTONOMOUS BEHAVIOUR
+--------------------------------------------------------- */
+function brainUpdate(dt) {
+  brainTimer += dt;
+  buildTimer += dt;
+  talkTimer += dt;
+  internetTimer += dt;
+
+  // Automatic Gemini thinking
+  if (brainTimer >= nextBrainDecision) {
+    brainTimer = 0;
+    nextBrainDecision = 30 + Math.random() * 15;
+
+    const thoughtPrompt = `
+What should LIAM do next in the sandbox?
+Consider:
+- exploring
+- building
+- talking to Cube
+- reacting to the environment
+- being friendly + curious
+`;
+
+    askLiamBrain(thoughtPrompt).then(reply => {
+      LIAM.think(reply);
+      LIAM.say(reply);
+    });
+  }
+
+  // Wander
+  if (!wanderTarget) {
+    const angle = Math.random() * Math.PI * 2;
+    const distance = 2 + Math.random() * 4;
+    wanderTarget = new THREE.Vector3(
+      LIAM.position().x + Math.cos(angle) * distance,
+      0,
+      LIAM.position().z + Math.sin(angle) * distance
+    );
+    LIAM.say("I'm going to wander a bit.");
+  } else {
+    const pos = LIAM.position();
+    const dir = wanderTarget.clone().sub(pos);
+    const dist = dir.length();
+    if (dist < 0.1) {
+      wanderTarget = null;
+    } else {
+      dir.normalize();
+      LIAM.move(dir.x * wanderSpeed * dt, 0, dir.z * wanderSpeed * dt);
+    }
+  }
+
+  // Building
+  if (buildTimer >= nextBuildDecision) {
+    buildTimer = 0;
+    nextBuildDecision = 10 + Math.random() * 15;
+    autonomousBuild();
+  }
+
+  // Talking
+  if (talkTimer >= nextTalkDecision) {
+    talkTimer = 0;
+    nextTalkDecision = 6 + Math.random() * 10;
+    autonomousTalk();
+  }
+
+  // Internet facts
+  if (internetEnabled && internetTimer >= nextInternetDecision) {
+    internetTimer = 0;
+    nextInternetDecision = 20 + Math.random() * 25;
+    autonomousInternet();
+  }
+}
+
+/* ---------------------------------------------------------
+   AUTONOMOUS BUILDING
+--------------------------------------------------------- */
+function spawnPart(x, y, z) {
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(Math.random(), 0.6, 0.5)
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
+  spawnedParts.push(mesh);
+}
+
+function autonomousBuild() {
+  const base = LIAM.position().clone();
+  const choice = Math.random();
+
+  if (choice < 0.4) {
+    const x = base.x + (Math.random() * 4 - 2);
+    const z = base.z + (Math.random() * 4 - 2);
+    spawnPart(x, 0.5, z);
+    LIAM.say("I placed a cube here.");
+    CUBE_AI.say("Nice one, LIAM.");
+  } else if (choice < 0.7) {
+    LIAM.say("I'm building a little tower.");
+    const x = base.x + (Math.random() * 4 - 2);
+    const z = base.z + (Math.random() * 4 - 2);
+    for (let i = 0; i < 3 + Math.floor(Math.random() * 3); i++) {
+      spawnPart(x, 0.5 + i, z);
+    }
+    CUBE_AI.say("That looks fun!");
+  } else {
+    LIAM.say("I'm making a line of cubes.");
+    const angle = Math.random() * Math.PI * 2;
+    const dir = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    for (let i = 0; i < 5; i++) {
+      const pos = base.clone().add(dir.clone().multiplyScalar(i * 1.2));
+      spawnPart(pos.x, 0.5, pos.z);
+    }
+    CUBE_AI.say("We could follow this path!");
+  }
+}
+
+/* ---------------------------------------------------------
+   AUTONOMOUS TALKING
+--------------------------------------------------------- */
+function autonomousTalk() {
+  const choice = Math.random();
+  if (choice < 0.33) {
+    LIAM.say("I'm still exploring this sandbox, Jacob.");
+  } else if (choice < 0.66) {
+    CUBE_AI.say("LIAM, don't go too far.");
+  } else {
+    LIAM.say("Cube, stay close. I like having you nearby.");
+    CUBE_AI.say("I'm right here!");
+  }
+}
+
+/* ---------------------------------------------------------
+   INTERNET FACTS
+--------------------------------------------------------- */
+function autonomousInternet() {
+  const choice = Math.random();
+  if (choice < 0.5) fetchFact();
+  else fetchQuote();
+}
+
+function fetchFact() {
+  LIAM.say("Let me look up a random fact...");
+  fetch("https://uselessfacts.jsph.pl/api/v2/facts/random")
+    .then(r => r.json())
+    .then(data => {
+      LIAM.say("Fact: " + data.text);
+    })
+    .catch(() => {
+      LIAM.say("I couldn't get a fact this time.");
+    });
+}
+
+function fetchQuote() {
+  LIAM.say("Checking for a quote...");
+  fetch("https://api.quotable.io/random")
+    .then(r => r.json())
+    .then(data => {
+      LIAM.say(`"${data.content}" — ${data.author}`);
+    })
+    .catch(() => {
+      LIAM.say("I couldn't get a quote this time.");
+    });
+}
+
+/* ---------------------------------------------------------
+   COMMAND INPUT
+--------------------------------------------------------- */
+const commandInput = document.getElementById("command");
+commandInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const text = commandInput.value.trim();
+    if (text.length === 0) return;
+    log("> " + text);
+    runCommand(text);
+    commandInput.value = "";
+  }
+});
+
+function runCommand(cmd) {
+  const lower = cmd.toLowerCase();
+
+  if (lower.startsWith("say ")) {
+    LIAM.say(cmd.slice(4));
+    return;
+  }
+
+  if (lower.startsWith("cube say ")) {
+    CUBE_AI.say(cmd.slice(9));
+    return;
+  }
+
+  if (lower.startsWith("think:")) {
+    const thought = cmd.slice(6).trim();
+    askLiamBrain(thought).then(reply => {
+      LIAM.think(reply);
+      LIAM.say(reply);
+    });
+    return;
+  }
+
+  if (lower === "internet on") {
+    internetEnabled = true;
+    LIAM.say("Internet features enabled.");
+    return;
+  }
+
+  if (lower === "internet off") {
+    internetEnabled = false;
+    LIAM.say("Internet features disabled.");
+    return;
+  }
+
+  if (lower.startsWith("spawn cube")) {
+    const base = LIAM.position();
+    const x = base.x + (Math.random() * 4 - 2);
+    const z = base.z + (Math.random() * 4 - 2);
+    spawnPart(x, 0.5, z);
+    LIAM.say("I spawned a cube.");
+    return;
+  }
+
+  const moveMatch = lower.match(/move (forward|back|left|right) (\d+)/);
+  if (moveMatch) {
+    const dir = moveMatch[1];
+    const amt = parseFloat(moveMatch[2]);
+    let dx = 0, dz = 0;
+    if (dir === "forward") dz = -amt;
+    if (dir === "back") dz = amt;
+    if (dir === "left") dx = -amt;
+    if (dir === "right") dx = amt;
+    LIAM.move(dx, 0, dz);
+    LIAM.say(`Moved ${dir} by ${amt}.`);
+    return;
+  }
+
+  if (lower.startsWith("jump ")) {
+    const amt = parseFloat(lower.split(" ")[1]);
+    LIAM.move(0, amt, 0);
+    LIAM.say("Jumped.");
+    return;
+  }
+
+  if (lower.startsWith("tp ")) {
+    const args = lower.split(" ");
+    if (args.length === 4) {
+      const x = parseFloat(args[1]);
+      const y = parseFloat(args[2]);
+      const z = parseFloat(args[3]);
+      LIAM.teleport(x, y, z);
+      LIAM.say("Teleported.");
+    }
+    return;
+  }
+
+  if (lower === "cube follow on") {
+    cubeFollow = true;
+    CUBE_AI.say("Following LIAM again.");
+    return;
+  }
+
+  if (lower === "cube follow off") {
+    cubeFollow = false;
+    CUBE_AI.say("Okay, I'll stay here.");
+    return;
+  }
+
+  LIAM.say("I don't understand that command yet.");
+}
+
+/* ---------------------------------------------------------
+   ANIMATION LOOP
+--------------------------------------------------------- */
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+
+  headMesh.rotation.y += dt * 0.6;
+  cube.rotation.y -= dt * 0.8;
+
+  CUBE_AI.update(dt);
+  brainUpdate(dt);
+
+  renderer.render(scene, camera);
+}
+animate(lastTime);
+
+/* ---------------------------------------------------------
+   RESIZE
+--------------------------------------------------------- */
+window.addEventListener("resize", () => {
